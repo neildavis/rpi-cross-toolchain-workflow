@@ -1,0 +1,99 @@
+name: RPi x-tools build
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - release
+      - neil/dev
+      - neil/gha
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  linux-arm-x-tools:
+    name: Build x-tools toolchains for ARM Linux
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      crosstool-ng_version: crosstool-ng-1.27.0
+    outputs:
+      armhf_x-tools_cache_key: ${{ steps.x-tools_cache_key_output.outputs.armhf_x-tools_cache_key }}
+      arm64_x-tools_cache_key: ${{ steps.x-tools_cache_key_output.outputs.arm64_x-tools_cache_key }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tuple: [armv6-rpi-linux-gnueabihf, aarch64-rpi3-linux-gnu]
+        include:
+          - tuple: armv6-rpi-linux-gnueabihf
+            arch: armhf
+            deb_target_multiarch: arm-linux-gnueabihf
+          - tuple: aarch64-rpi3-linux-gnu
+            arch: arm64
+            deb_target_multiarch: aarch64-linux-gnu
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Update common environment for arm x-tools cache/builds
+        run: |
+          echo "crosstool-ng_prefix_dir=$HOME" >> "$GITHUB_ENV"
+          echo "crosstool-ng_install_dir=$HOME/cross" >> "$GITHUB_ENV"
+      - name: Generate x-tools local cache key
+        id: x-tools_cache_key
+        run: |
+          echo "x-tools_cache_key=x-tools_${{ matrix.tuple }}_${{ hashFiles(format('{0}.defconfig' , matrix.tuple)) }}" >> $GITHUB_OUTPUT
+      - name: Generate x-tools cache key outputs
+        id: x-tools_cache_key_output
+        run: echo "${{matrix.arch}}_x-tools_cache_key=${{steps.x-tools_cache_key.outputs.x-tools_cache_key}}" >> $GITHUB_OUTPUT
+      - name: Cache x-tools
+        id: cache-x-tools
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.x-tools_cache_key.outputs.x-tools_cache_key }}
+          path: ${{ env.crosstool-ng_prefix_dir }}/x-tools/${{ matrix.tuple }}
+      - name: Install crosstool-ng build dependencies
+        if: steps.cache-x-tools.outputs.cache-hit != 'true'
+        run: |
+          sudo apt update && sudo apt -y install gcc g++ gperf bison flex texinfo help2man make libncurses5-dev \
+          python3-dev autoconf automake libtool libtool-bin gawk wget bzip2 xz-utils unzip \
+          patch libstdc++6 rsync git meson ninja-build
+          sudo apt reinstall ca-certificates
+      - name: Install crosstool-ng
+        if: steps.cache-x-tools.outputs.cache-hit != 'true'
+        run: |
+          wget -qO- https://github.com/crosstool-ng/crosstool-ng/releases/download/${{ env.crosstool-ng_version }}/${{ env.crosstool-ng_version }}.tar.xz | tar xJ -C $HOME
+          cd $HOME/${{ env.crosstool-ng_version }}
+          mkdir -p ${{ env.crosstool-ng_install_dir }}
+          ./configure --prefix=${{ env.crosstool-ng_install_dir }}
+          make
+          make install
+      - name: Configure crosstool-ng
+        if: steps.cache-x-tools.outputs.cache-hit != 'true'
+        run: |
+          DEFCONFIG=${{ matrix.tuple }}.defconfig ${{ env.crosstool-ng_install_dir }}/bin/ct-ng defconfig
+          eval $(grep CT_BINUTILS_VERSION .config)
+          CT_BINUTILS_PATCH_DIR=patches/binutils/$CT_BINUTILS_VERSION/
+          mkdir -p "$CT_BINUTILS_PATCH_DIR"
+          python get_deb_pkg_file.py binutils "$CT_BINUTILS_VERSION" debian/patches/129_multiarch_libpath.patch
+          mv 129_multiarch_libpath.patch "$CT_BINUTILS_PATCH_DIR"/
+      - name: Build x-tools toolchain using crosstool-ng
+        if: steps.cache-x-tools.outputs.cache-hit != 'true'
+        run: |
+          export DEB_TARGET_MULTIARCH=${{ matrix.deb_target_multiarch }}
+          V=1 ${{ env.crosstool-ng_install_dir }}/bin/ct-ng build.$(nproc)
+      - name: Package x-tools toolchain tarball
+        run: tar -cvzf "x-tools-${{ matrix.tuple }}.tar.gz" -C "${{ env.crosstool-ng_prefix_dir }}" "x-tools"
+      - name: Upload x-tools toolchain artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x-tools-${{ matrix.tuple }}
+          path: "x-tools-${{ matrix.tuple }}.tar.gz"
+      - name: Upload ct-ng build.log artifact
+        if: steps.cache-x-tools.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: crosstool-ng_${{ matrix.tuple }}_build_log
+          path: build.log
