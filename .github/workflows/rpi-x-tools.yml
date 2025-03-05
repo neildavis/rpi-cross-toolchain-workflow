@@ -5,8 +5,6 @@ on:
     branches:
       - main
       - release
-      - neil/dev
-      - neil/gha
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -84,6 +82,15 @@ jobs:
         run: |
           export DEB_TARGET_MULTIARCH=${{ matrix.deb_target_multiarch }}
           V=1 ${{ env.crosstool-ng_install_dir }}/bin/ct-ng build.$(nproc)
+      - name: Make restored x-tools cache dir writable
+        if: steps.cache-x-tools.outputs.cache-hit == 'true'
+        run: chmod ug+w "${{ env.crosstool-ng_prefix_dir }}/x-tools/${{ matrix.tuple }}"
+      - name: Add CMake toolchain files to x-tools
+        run: |
+          ls -ld "${{ env.crosstool-ng_prefix_dir }}/x-tools/${{ matrix.tuple }}"
+          mkdir -p "${{ env.crosstool-ng_prefix_dir }}/x-tools/${{ matrix.tuple }}/cmake"
+          cp cmake/arm-common-linux.cmake ${{ env.crosstool-ng_prefix_dir }}/x-tools/${{ matrix.tuple }}/cmake
+          cp cmake/${{ matrix.tuple }}.cmake ${{ env.crosstool-ng_prefix_dir }}/x-tools/${{ matrix.tuple }}/cmake
       - name: Package x-tools toolchain tarball
         run: tar -cvzf "x-tools-${{ matrix.tuple }}.tar.gz" -C "${{ env.crosstool-ng_prefix_dir }}" "x-tools"
       - name: Upload x-tools toolchain artifact
