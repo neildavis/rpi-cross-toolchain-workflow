@@ -5,7 +5,9 @@ on:
     branches:
       - main
       - release
-
+  release:
+    types: ['released', 'prereleased']
+    
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -15,6 +17,8 @@ jobs:
   linux-arm-x-tools:
     name: Build x-tools toolchains for ARM Linux
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     env:
       DEBIAN_FRONTEND: noninteractive
       crosstool-ng_version: crosstool-ng-1.27.0
@@ -102,3 +106,9 @@ jobs:
         with:
           name: crosstool-ng_${{ matrix.tuple }}_build_log
           path: build.log
+      - name: Release toolchain
+        if: ${{ github.event.action == 'released' || github.event.action == 'prereleased' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "x-tools-${{ matrix.tuple }}.tar.gz"
+  
