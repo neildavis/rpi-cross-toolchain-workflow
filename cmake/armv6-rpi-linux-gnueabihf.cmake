@@ -6,7 +6,7 @@ set(RPI_GCC_TRIPLE "armv6-rpi-linux-gnueabihf")
 set(CMAKE_LIBRARY_ARCHITECTURE arm-linux-gnueabihf)
 set(CPACK_DEBIAN_PACKAGE_ARCHITECTURE armhf)
 # Set the architecture-specific compiler flags
-set(ARCH_FLAGS "-mcpu=arm1176jzf-s")
+set(ARCH_FLAGS "-mtune=arm1176jzf-s")
 set(CMAKE_THREAD_LIBS_INIT "-lpthread -lc")
 
 # Common ARM config
