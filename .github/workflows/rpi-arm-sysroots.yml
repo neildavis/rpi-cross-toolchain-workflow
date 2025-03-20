@@ -21,9 +21,36 @@ on:
         default: ''
         required: false
         type: string
-        
+    outputs:
+      # Non-arch specific outputs.
+      sysroot_cache_key:
+        description: Cache key of cached sysroot (last successful run - don't use for matrix strategy callers!)
+        value: ${{ jobs.linux-arm-sysroots.outputs.sysroot_cache_key }}
+      sysroot_path:
+        description: Path of cached sysroot (last successful run - don't use for matrix strategy callers!)
+        value: ${{ jobs.linux-arm-sysroots.outputs.sysroot_path }}
+      deb_release:
+        description:
+        value: ${{ inputs.deb_release }}
+      # Arch specific outputs. Useful when caller IS using a matrix strategy for inputs.arch
+      # Necessary since without it, the 'sysroot_cache_key' and 'sysroot_path' output values
+      # will be populated by the last (successful) completion of a job in a caller's matrix strategy. 
+      # See https://docs.github.com/en/actions/sharing-automations/reusing-workflows#using-outputs-from-a-reusable-workflow
+      sysroot_cache_key_armhf:
+        description: Cache key of cached sysroot for armhf variant (use for matrix strategy callers)
+        value: ${{ jobs.linux-arm-sysroots.outputs.sysroot_cache_key_armhf }}
+      sysroot_cache_key_arm64:
+        description: Cache key of cached sysroot for arm64 variant (use for matrix strategy callers)
+        value: ${{ jobs.linux-arm-sysroots.outputs.sysroot_cache_key_arm64 }}
+      sysroot_path_armhf:
+        description:  Path of cached sysroot for armhf variant (use for matrix strategy callers)
+        value: ${{ jobs.linux-arm-sysroots.outputs.sysroot_path_armhf }}
+      sysroot_path_arm64:
+        description: Path of cached sysroot for arm64 variant (use for matrix strategy callers)
+        value: ${{ jobs.linux-arm-sysroots.outputs.sysroot_path_arm64 }}
+   
 concurrency:
-  group: ${{ github.inputs.deb_release }}-${{ github.inputs.arch }}-${{ github.inputs-apt_pkgs }}
+  group: ${{ inputs.deb_release }}-${{ inputs.arch }}-${{ inputs.apt_pkgs }}
   cancel-in-progress: true
 
 jobs:
@@ -37,11 +64,7 @@ jobs:
       # Non-arch specific outputs.
       sysroot_cache_key: ${{ steps.sysroot_cache_key.outputs.sysroot_cache_key }}
       sysroot_path: ${{ steps.sysroot_path.outputs.sysroot_path }}
-      deb_release: ${{ inputs.deb_release }}
-      # Arch specific outputs. Useful when caller IS using a matrix strategy for inputs.arch
-      # Necessary since without it, the 'sysroot_cache_key' and 'sysroot_path' output values
-      # will be populated by the last (successful) completion of a job in a caller's matrix strategy. 
-      # See https://docs.github.com/en/actions/sharing-automations/reusing-workflows#using-outputs-from-a-reusable-workflow
+      # Arch specific outputs. Useful when caller is using a matrix strategy for inputs.arch
       sysroot_cache_key_armhf: ${{ steps.arch-sysroot-outputs.outputs.sysroot_cache_key_armhf }}
       sysroot_cache_key_arm64: ${{ steps.arch-sysroot-outputs.outputs.sysroot_cache_key_arm64 }}
       sysroot_path_armhf: ${{ steps.arch-sysroot-outputs.outputs.sysroot_path_armhf }}
@@ -66,8 +89,8 @@ jobs:
       - name: Generate sysroot cache key
         id: sysroot_cache_key
         run: |
-          echo "${{ inputs.apt_pkgs }}" > apt_pkgs.txt
-          echo "sysroot_cache_key=sysroot-${{ inputs.deb_release }}-${{ inputs.arch }}-${{ hashFiles('apt_pkgs.txt') }}" >> $GITHUB_OUTPUT
+          apt_pkgs_hash=$(echo "${{ inputs.apt_pkgs }}" | sha256sum | cut -d' ' -f1)
+          echo "sysroot_cache_key=sysroot-${{ inputs.deb_release }}-${{ inputs.arch }}-${apt_pkgs_hash}" >> $GITHUB_OUTPUT
       - name: Add arch specific sysroot outputs (to support matrix strategy caller)
         id: arch-sysroot-outputs
         run: |
@@ -93,7 +116,7 @@ jobs:
           echo "deb_mirror_url=http://deb.debian.org/debian" >> "$GITHUB_ENV"
       - name: Install sbuild tools
         if: steps.cache-sysroot.outputs.cache-hit != 'true'
-        run: sudo apt install -y sbuild debhelper ubuntu-dev-tools binfmt-support
+        run: sudo apt install -y sbuild debhelper ubuntu-dev-tools binfmt-support symlinks
       - name: Create .sbuildrc file
         if: steps.cache-sysroot.outputs.cache-hit != 'true'
         run: |
@@ -119,4 +142,5 @@ jobs:
           ln -s ${{ env.sysroot }}/usr/src ${{ env.sysroot }}/src
       - name: Fix broken symlinks in sysroot
         if: steps.cache-sysroot.outputs.cache-hit != 'true'
-        run: ./fix_sysroot_links.sh ${{ env.sysroot }}
+        run: symlinks -cr ${{ env.sysroot }}
+  
