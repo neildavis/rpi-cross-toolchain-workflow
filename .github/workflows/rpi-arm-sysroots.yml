@@ -1,0 +1,122 @@
+name: RPi ARM sysroot build
+
+on:
+  workflow_call:
+    inputs:
+      # deb_release is NOT currently supported from a caller matrix strategy (see outputs)
+      deb_release:
+        description: "Debian Release ('bookworm' / 'bullseye')"
+        default: 'bookworm'
+        required: true
+        type: string
+      # arch IS supported from a caller matrix strategy (see arch specific outputs)
+      arch:
+        description: "ARM Architecture ('armhf' / 'arm64')"
+        default: 'arm64'
+        required: true
+        type: string
+      # apt_pkgs is NOT supported from a caller matrix strategy.
+      apt_pkgs:
+        description: 'Additional apt packages (optional - space separated list)'
+        default: ''
+        required: false
+        type: string
+        
+concurrency:
+  group: ${{ github.inputs.deb_release }}-${{ github.inputs.arch }}-${{ github.inputs-apt_pkgs }}
+  cancel-in-progress: true
+
+jobs:
+
+  linux-arm-sysroots:
+    name: Build sysroots for ARM Linux
+    runs-on: ubuntu-24.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    outputs:
+      # Non-arch specific outputs.
+      sysroot_cache_key: ${{ steps.sysroot_cache_key.outputs.sysroot_cache_key }}
+      sysroot_path: ${{ steps.sysroot_path.outputs.sysroot_path }}
+      deb_release: ${{ inputs.deb_release }}
+      # Arch specific outputs. Useful when caller IS using a matrix strategy for inputs.arch
+      # Necessary since without it, the 'sysroot_cache_key' and 'sysroot_path' output values
+      # will be populated by the last (successful) completion of a job in a caller's matrix strategy. 
+      # See https://docs.github.com/en/actions/sharing-automations/reusing-workflows#using-outputs-from-a-reusable-workflow
+      sysroot_cache_key_armhf: ${{ steps.arch-sysroot-outputs.outputs.sysroot_cache_key_armhf }}
+      sysroot_cache_key_arm64: ${{ steps.arch-sysroot-outputs.outputs.sysroot_cache_key_arm64 }}
+      sysroot_path_armhf: ${{ steps.arch-sysroot-outputs.outputs.sysroot_path_armhf }}
+      sysroot_path_arm64: ${{ steps.arch-sysroot-outputs.outputs.sysroot_path_arm64 }}
+    steps:
+      - name: Update apt package cache
+        run: sudo apt update
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set tuple env var (arm64)
+        if: ${{ inputs.arch == 'arm64' }}
+        run: echo "tuple=aarch64-rpi3-linux-gnu" >> "$GITHUB_ENV"
+      - name: Set tuple env var (armhf)
+        if: ${{ inputs.arch == 'armhf' }}
+        run: echo "tuple=armv6-rpi-linux-gnueabihf" >> "$GITHUB_ENV"
+      - name: Generate sysroot path
+        id: sysroot_path
+        run: |
+          sysroot="$HOME/x-tools/${{ env.tuple }}/sysroot"
+          echo "sysroot=${sysroot}" >> "$GITHUB_ENV"
+          echo "sysroot_path=${sysroot}" >> $GITHUB_OUTPUT
+      - name: Generate sysroot cache key
+        id: sysroot_cache_key
+        run: |
+          echo "${{ inputs.apt_pkgs }}" > apt_pkgs.txt
+          echo "sysroot_cache_key=sysroot-${{ inputs.deb_release }}-${{ inputs.arch }}-${{ hashFiles('apt_pkgs.txt') }}" >> $GITHUB_OUTPUT
+      - name: Add arch specific sysroot outputs (to support matrix strategy caller)
+        id: arch-sysroot-outputs
+        run: |
+          echo "sysroot_cache_key_${{ inputs.arch }}=${{steps.sysroot_cache_key.outputs.sysroot_cache_key }}" >> $GITHUB_OUTPUT
+          echo "sysroot_path_${{ inputs.arch }}=${{ env.sysroot }}" >> $GITHUB_OUTPUT
+      - name: Cache sysroot
+        id: cache-sysroot
+        uses: actions/cache@v4
+        with:
+          key: ${{ steps.sysroot_cache_key.outputs.sysroot_cache_key }} 
+          path: ${{ env.sysroot }}
+      - name: Prepare Debian environment for armhf sysroot build
+        if: ${{ steps.cache-sysroot.outputs.cache-hit != 'true' && inputs.arch == 'armhf' }}
+        run: |
+          wget -qO- https://archive.raspbian.org/raspbian.public.key | gpg --import -
+          echo "deb_keyring_path=$HOME/.gnupg/pubring.kbx" >> "$GITHUB_ENV"
+          echo "deb_mirror_url=http://raspbian.raspberrypi.org/raspbian" >> "$GITHUB_ENV"
+      - name: Prepare Debian environment for arm64/aarch64 cross build
+        if: ${{ steps.cache-sysroot.outputs.cache-hit != 'true' && inputs.arch == 'arm64' }}
+        run: |
+          sudo apt -y install debian-archive-keyring
+          echo "deb_keyring_path=/usr/share/keyrings/debian-archive-keyring.gpg" >> "$GITHUB_ENV"
+          echo "deb_mirror_url=http://deb.debian.org/debian" >> "$GITHUB_ENV"
+      - name: Install sbuild tools
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
+        run: sudo apt install -y sbuild debhelper ubuntu-dev-tools binfmt-support
+      - name: Create .sbuildrc file
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
+        run: |
+          echo "\$maintainer_name='Joe Bloggs <joe.bloggs@example.com>';" > ~/.sbuildrc
+          echo "1;" >> ~/.sbuildrc
+      - name: Build schroot
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
+        run: |
+          sudo gpasswd -M $USER sbuild
+          sudo gpasswd -r sbuild
+          sg sbuild -c 'mk-sbuild --arch=${{ inputs.arch }} ${{ inputs.deb_release }} --debootstrap-mirror=${{ env.deb_mirror_url }} --name=${{ inputs.deb_release }} --debootstrap-keyring "${{ env.deb_keyring_path }} --merged-usr" --skip-proposed --skip-updates --skip-security'
+      - name: Install schroot lib dependencies
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
+        run: sudo sbuild-apt ${{ inputs.deb_release }}-${{ inputs.arch }} apt-get install ${{ inputs.apt_pkgs }}
+      - name: Copy schroot usr dir to home dir as sysroot
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ${{ env.sysroot }}
+          cp -R /var/lib/schroot/chroots/${{ inputs.deb_release }}-${{ inputs.arch }}/usr ${{ env.sysroot }}
+          ln -s ${{ env.sysroot }}/usr/bin ${{ env.sysroot }}/bin 
+          ln -s ${{ env.sysroot }}/usr/lib ${{ env.sysroot }}/lib 
+          ln -s ${{ env.sysroot }}/usr/sbin ${{ env.sysroot }}/sbin 
+          ln -s ${{ env.sysroot }}/usr/src ${{ env.sysroot }}/src
+      - name: Fix broken symlinks in sysroot
+        if: steps.cache-sysroot.outputs.cache-hit != 'true'
+        run: ./fix_sysroot_links.sh ${{ env.sysroot }}
