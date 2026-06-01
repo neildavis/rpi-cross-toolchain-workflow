@@ -73,7 +73,7 @@ jobs:
       - name: Update apt package cache
         run: sudo apt update
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Set tuple env var (arm64)
         if: ${{ inputs.arch == 'arm64' }}
         run: echo "tuple=aarch64-rpi3-linux-gnu" >> "$GITHUB_ENV"
@@ -98,7 +98,7 @@ jobs:
           echo "sysroot_path_${{ inputs.arch }}=${{ env.sysroot }}" >> $GITHUB_OUTPUT
       - name: Cache sysroot
         id: cache-sysroot
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           key: ${{ steps.sysroot_cache_key.outputs.sysroot_cache_key }} 
           path: ${{ env.sysroot }}
